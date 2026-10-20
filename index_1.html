@@ -1,0 +1,771 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Global Equity Drawdown Monitor</title>
+<!--
+  SETUP (about 5 minutes)
+  1. Google Sheets > File > Import > Upload "drawdown_sheet_template.csv" > "Replace current sheet".
+     Formulas starting with "=" are evaluated on import. Rename the tab "Quotes".
+  2. File > Settings > Calculation > Recalculation: "On change and every minute".
+  3. File > Share > Publish to web > choose the "Quotes" tab > "Comma-separated values (.csv)" > Publish.
+     Copy the link (it ends with output=csv).
+  4. Open this page, click "Data source", paste the link, Save. Or paste it into CONFIG.QUOTES_CSV_URL below.
+  To add a ticker: add a row in the sheet, fill Group (Index/Stock), Name, Ticker, Symbol (e.g. NASDAQ:NFLX),
+  and copy the formulas down from the row above.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lexend:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+/* Layout: navy header band, status panel, 4 KPI tiles, filter row, two sortable table cards. Dark-first. */
+:root{
+  --bg:#0f1525; --surface:#161d2e; --surface-2:#1b2337; --line:#26304a; --line-soft:#1f2840;
+  --head-a:#1d2a4a; --head-b:#24345c;
+  --fg:#e6ebf5; --fg-2:#c3cbdc; --muted:#8a96b0;
+  --accent:#7b9cff; --accent-ink:#0f1730;
+  --good:#6fcf97; --dip:#9aa6bf; --warn:#f2b25c; --bad:#f08080;
+  --good-bg:rgba(111,207,151,.14); --dip-bg:rgba(154,166,191,.14); --warn-bg:rgba(242,178,92,.15); --bad-bg:rgba(240,128,128,.15);
+  --track:#232c44;
+  --f-display:"Lexend","Inter",system-ui,sans-serif;
+  --f-ui:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,"SFMono-Regular",Menlo,Consolas,monospace;
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){
+  --bg:#f3f5fa; --surface:#ffffff; --surface-2:#f6f8fc; --line:#dde3ef; --line-soft:#e8ecf4;
+  --head-a:#1d2a4a; --head-b:#2b3e6b;
+  --fg:#172036; --fg-2:#33405e; --muted:#66728c;
+  --accent:#3d63e0; --accent-ink:#ffffff;
+  --good:#1f9a5a; --dip:#5d6a85; --warn:#b8720f; --bad:#c94343;
+  --good-bg:rgba(31,154,90,.12); --dip-bg:rgba(93,106,133,.12); --warn-bg:rgba(184,114,15,.12); --bad-bg:rgba(201,67,67,.11);
+  --track:#e3e8f2; color-scheme:light;}}
+:root[data-theme="light"]{
+  --bg:#f3f5fa; --surface:#ffffff; --surface-2:#f6f8fc; --line:#dde3ef; --line-soft:#e8ecf4;
+  --head-a:#1d2a4a; --head-b:#2b3e6b;
+  --fg:#172036; --fg-2:#33405e; --muted:#66728c;
+  --accent:#3d63e0; --accent-ink:#ffffff;
+  --good:#1f9a5a; --dip:#5d6a85; --warn:#b8720f; --bad:#c94343;
+  --good-bg:rgba(31,154,90,.12); --dip-bg:rgba(93,106,133,.12); --warn-bg:rgba(184,114,15,.12); --bad-bg:rgba(201,67,67,.11);
+  --track:#e3e8f2; color-scheme:light;}
+
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font:14px/1.45 var(--f-ui);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1640px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.num{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+button,select,input{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* Header band (always navy, white text in both themes) */
+header.band{background:linear-gradient(120deg,var(--head-a),var(--head-b));color:#fff;padding-block:28px 26px}
+.band .wrap{display:flex;gap:20px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap}
+h1{font:700 clamp(24px,3.2vw,38px)/1.1 var(--f-display);margin:0;letter-spacing:-.01em;text-wrap:balance}
+.sub{margin:8px 0 0;color:rgba(255,255,255,.82);font-size:15px}
+.hbtns{display:flex;gap:10px;flex-wrap:wrap}
+.hbtn{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.12);color:#fff;border-radius:10px;padding:8px 14px;font-weight:600;cursor:pointer}
+.hbtn:hover{background:rgba(255,255,255,.17)}
+.hbtn svg{width:16px;height:16px}
+.live{cursor:default;border-radius:999px}
+.dot{width:10px;height:10px;border-radius:50%;background:#6fcf97;box-shadow:0 0 0 0 rgba(111,207,151,.6);animation:pulse 2s infinite}
+.live.stale .dot{background:#f2b25c;animation:none}
+.live.off .dot{background:#f08080;animation:none}
+.live.demo .dot{background:#9aa6bf;animation:none}
+@keyframes pulse{70%{box-shadow:0 0 0 8px rgba(111,207,151,0)}100%{box-shadow:0 0 0 0 rgba(111,207,151,0)}}
+
+main{padding-block:26px 40px;display:grid;gap:26px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px}
+
+/* Banners */
+.banner{border-radius:12px;padding:12px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:14px}
+.banner.demo{background:var(--dip-bg);border:1px solid var(--line);color:var(--fg-2)}
+.banner.err{background:var(--bad-bg);border:1px solid var(--bad);color:var(--fg)}
+.banner b{color:var(--fg)}
+.linkbtn{background:none;border:0;color:var(--accent);font-weight:600;cursor:pointer;padding:0;text-decoration:underline;text-underline-offset:3px}
+
+/* Status panel */
+.status{display:flex;align-items:center;gap:28px;padding:22px 24px;flex-wrap:wrap}
+.refresh{display:inline-flex;align-items:center;gap:10px;background:var(--accent);color:var(--accent-ink);border:0;border-radius:10px;padding:13px 22px;font-weight:700;font-size:16px;cursor:pointer}
+.refresh:hover{filter:brightness(1.08)}
+.refresh svg{width:18px;height:18px}
+.refresh.busy svg{animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.stamps{display:grid;grid-template-columns:repeat(2,minmax(0,auto));gap:10px 40px}
+.stamp .k{font-size:11.5px;font-weight:700;letter-spacing:.09em;color:var(--muted);text-transform:uppercase}
+.stamp .v{font-family:var(--f-mono);font-size:14.5px;margin-top:2px;font-variant-numeric:tabular-nums}
+.auto{margin-left:auto;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.auto label{color:var(--muted);font-weight:500}
+.auto select{background:var(--surface-2);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-size:15px}
+.countdown{font-family:var(--f-mono);color:var(--muted);font-size:13.5px}
+
+/* KPIs */
+.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px}
+.kpi{padding:20px 22px;border-left:4px solid var(--c,var(--line))}
+.kpi .k{font-size:12px;font-weight:700;letter-spacing:.09em;color:var(--fg-2);text-transform:uppercase}
+.kpi .v{font:600 34px/1.15 var(--f-mono);margin:8px 0 4px}
+.kpi .d{color:var(--muted)}
+.kpi.g{--c:var(--good)} .kpi.w{--c:var(--warn)} .kpi.b{--c:var(--bad)} .kpi.x{--c:var(--fg-2)}
+
+/* Toolbar */
+.toolbar{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+.search{position:relative;flex:0 1 450px;min-width:0}
+.search svg{position:absolute;left:14px;top:50%;translate:0 -50%;width:16px;height:16px;color:var(--muted)}
+.search input{width:100%;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px 12px 40px;font-size:15px}
+.search input::placeholder{color:var(--muted)}
+.legend{display:flex;gap:18px;flex-wrap:wrap;color:var(--fg-2)}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.legend i{width:12px;height:12px;border-radius:3px;background:var(--c)}
+
+/* Tables */
+.tcard{overflow:hidden}
+.thead{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px 22px;background:var(--surface-2);border-bottom:1px solid var(--line);flex-wrap:wrap}
+.thead h2{margin:0;font:700 14px var(--f-ui);letter-spacing:.12em;color:var(--accent);text-transform:uppercase}
+.thead .meta{font-family:var(--f-mono);font-size:13px;font-weight:600;letter-spacing:.06em;color:var(--fg-2)}
+.scroll{overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:1240px}
+th{font-size:12px;font-weight:700;letter-spacing:.09em;color:var(--fg-2);text-transform:uppercase;text-align:left;padding:14px 16px;border-bottom:1px solid var(--line);white-space:nowrap;user-select:none}
+th button{all:unset;cursor:pointer;display:inline-flex;gap:5px;align-items:center}
+th button:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:3px}
+th .arr{color:var(--muted);font-size:11px;opacity:.7}
+th[aria-sort] .arr{color:var(--accent);opacity:1}
+th.r,td.r{text-align:right}
+td{padding:14px 16px;border-bottom:1px solid var(--line-soft);vertical-align:middle}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:var(--surface-2)}
+td.name{font-weight:700;font-size:16px;white-space:nowrap}
+td.tk{font-family:var(--f-mono);color:var(--fg-2);font-size:14px}
+th.sticky,td.sticky{position:sticky;left:0;background:var(--surface);z-index:1}
+tbody tr:hover td.sticky{background:var(--surface-2)}
+
+.price{font:500 17px var(--f-mono);font-variant-numeric:tabular-nums}
+.chg{font:500 13px var(--f-mono);margin-top:2px}
+.up{color:var(--good)} .down{color:var(--bad)} .flat{color:var(--muted)}
+.today{display:inline-flex;align-items:center;gap:5px;margin-top:6px;font:600 12.5px var(--f-ui);padding:3px 9px 3px 4px;border-radius:999px;white-space:nowrap}
+.today.up{background:var(--good-bg)} .today.down{background:var(--bad-bg)} .today.flat{background:var(--dip-bg)}
+.today .ic{width:16px;height:16px;border-radius:50%;display:grid;place-items:center;background:currentColor}
+.today .ic svg{width:11px;height:11px;color:var(--surface)}
+.flash-up{animation:fu 1.4s ease-out} .flash-down{animation:fd 1.4s ease-out}
+@keyframes fu{from{background:var(--good-bg)}} @keyframes fd{from{background:var(--bad-bg)}}
+
+/* Range cells: H / L stacked + bar */
+.rng{display:grid;grid-template-columns:auto 1fr;gap:2px 8px;align-items:baseline;min-width:150px}
+.rng .lab{font:700 10.5px var(--f-ui);letter-spacing:.08em;color:var(--muted)}
+.rng .val{font:500 14.5px var(--f-mono);font-variant-numeric:tabular-nums;text-align:right}
+.rbar{grid-column:1/-1;position:relative;height:6px;border-radius:3px;background:var(--track);margin-top:7px}
+.rbar .fill{position:absolute;inset:0 auto 0 0;border-radius:3px;background:linear-gradient(90deg,var(--bad),var(--warn),var(--good));opacity:.45}
+.rbar .mk{position:absolute;top:50%;width:11px;height:11px;border-radius:50%;background:var(--fg);border:2px solid var(--surface);translate:-50% -50%}
+.rng .note{grid-column:1/-1;font:500 11.5px var(--f-mono);color:var(--muted);margin-top:4px;text-align:right}
+
+.ath{font:500 16px var(--f-mono);font-variant-numeric:tabular-nums}
+.dd{display:flex;align-items:center;gap:14px;justify-content:flex-end}
+.ddbar{width:150px;height:7px;border-radius:4px;background:var(--track);position:relative;overflow:hidden;flex:none}
+.ddbar i{position:absolute;right:0;top:0;bottom:0;border-radius:4px;background:var(--c)}
+.ddv{font:600 17px var(--f-mono);min-width:82px;text-align:right;color:var(--c)}
+.pill{display:inline-block;font-weight:700;font-size:13px;padding:5px 12px;border-radius:999px;color:var(--c);background:var(--cb);white-space:nowrap}
+.s-near{--c:var(--good);--cb:var(--good-bg)} .s-dip{--c:var(--dip);--cb:var(--dip-bg)} .s-cor{--c:var(--warn);--cb:var(--warn-bg)} .s-bear{--c:var(--bad);--cb:var(--bad-bg)}
+.s-dip .ddv{color:var(--fg)}
+.empty td{color:var(--muted);text-align:center;padding:28px}
+
+footer{border-top:1px solid var(--line);padding-top:20px;color:var(--muted);font-size:14px;display:grid;gap:8px}
+footer b{color:var(--fg-2)}
+
+/* Modal */
+dialog{background:var(--surface);color:var(--fg);border:1px solid var(--line);border-radius:16px;padding:0;width:min(640px,calc(100vw - 32px));max-height:calc(100vh - 48px)}
+dialog::backdrop{background:rgba(5,9,20,.6)}
+.mbody{padding:24px;display:grid;gap:14px;overflow:auto}
+.mbody h3{margin:0;font:700 20px var(--f-display)}
+.mbody p,.mbody li{color:var(--fg-2);margin:0}
+.mbody ol{margin:0;padding-left:20px;display:grid;gap:6px}
+.mbody code{font-family:var(--f-mono);font-size:12.5px;background:var(--surface-2);border:1px solid var(--line);padding:1px 5px;border-radius:5px}
+.mbody input{width:100%;background:var(--surface-2);border:1px solid var(--line);border-radius:9px;padding:11px 12px;font-family:var(--f-mono);font-size:13px}
+.mrow{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.btn{border:1px solid var(--line);background:var(--surface-2);border-radius:9px;padding:9px 16px;font-weight:600;cursor:pointer}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent}
+.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom,0px));translate:-50% 0;background:var(--fg);color:var(--bg);padding:10px 18px;border-radius:10px;font-weight:600;opacity:0;pointer-events:none;transition:opacity .2s}
+.toast.show{opacity:1}
+
+.msort{display:none;align-items:center;gap:8px;color:var(--muted);font-weight:500}
+.msort select{background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:9px 10px;font-size:15px;color:var(--fg)}
+
+/* Phone: each ticker becomes a card, no sideways scrolling */
+@media (max-width:760px){
+  .msort{display:flex}
+  .search{flex:1 1 100%}
+  .scroll{overflow:visible}
+  table{min-width:0;display:block}
+  thead{display:none}
+  tbody{display:block}
+  tbody tr{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+    grid-template-areas:"name st" "tk st" "price dd" "day wk" "ath ath";
+    gap:12px 16px;padding:16px;border-bottom:1px solid var(--line)}
+  tbody tr:last-child{border-bottom:0}
+  tbody tr:hover td{background:none}
+  tbody td, tbody td.r{display:block;padding:0;border:0;min-width:0;text-align:left}
+  tbody td.c-dd{text-align:right}
+  .today{margin-top:8px}
+  td.sticky{position:static;background:none}
+  td[data-label]::before{content:attr(data-label);display:block;font:700 10.5px/1.3 var(--f-ui);letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin-bottom:6px}
+  .c-name{grid-area:name;font-size:18px;white-space:normal}
+  .c-tk{grid-area:tk;margin-top:-10px;font-size:13px}
+  .c-st{grid-area:st;justify-self:end;align-self:start}
+  .c-price{grid-area:price;text-align:left}
+  .c-price .price{font-size:20px}
+  .today{white-space:normal;font-size:12px}
+  .c-dd{grid-area:dd;text-align:right}
+  .dd{flex-direction:column-reverse;align-items:flex-end;gap:8px}
+  .ddbar{width:100%;max-width:150px}
+  .ddv{font-size:20px;min-width:0}
+  .c-day{grid-area:day;background:var(--surface-2);border:1px solid var(--line-soft);border-radius:10px;padding:10px 12px}
+  .c-wk{grid-area:wk;background:var(--surface-2);border:1px solid var(--line-soft);border-radius:10px;padding:10px 12px}
+  .rng{min-width:0}
+  .rng .note{text-align:left}
+  .c-ath{grid-area:ath;display:flex;justify-content:space-between;align-items:baseline;padding-top:12px;border-top:1px dashed var(--line);text-align:right}
+  .c-ath::before{margin:0}
+  tr.empty{display:block;padding:24px 16px}
+  tr.empty td{text-align:center}
+  .thead{padding:14px 16px}
+}
+
+@media (max-width:1100px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.auto{margin-left:0}}
+@media (max-width:560px){.kpis{grid-template-columns:1fr}.stamps{grid-template-columns:1fr}.status{gap:18px}.legend{gap:10px 14px;font-size:13px}.kpi .v{font-size:28px}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+
+<header class="band">
+  <div class="wrap">
+    <div>
+      <h1>Global Equity Drawdown Monitor</h1>
+      <p class="sub">Distance from all-time highs · Data via Google Finance (approx. 15–20 min delay)</p>
+    </div>
+    <div class="hbtns">
+      <span class="hbtn live" id="live" role="status"><span class="dot"></span><span id="liveTxt">LIVE</span></span>
+      <button class="hbtn" id="shareBtn" type="button" aria-label="Share this page">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg>Share</button>
+      <button class="hbtn" id="themeBtn" type="button" aria-label="Switch theme">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg><span id="themeTxt">Light</span></button>
+      <button class="hbtn" id="srcBtn" type="button" aria-label="Data source settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg>Data source</button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="banner"></div>
+
+  <section class="card status" aria-label="Refresh status">
+    <button class="refresh" id="refreshBtn" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/></svg>Refresh now</button>
+    <div class="stamps">
+      <div class="stamp"><div class="k">Last updated</div><div class="v" id="tsLast">—</div></div>
+      <div class="stamp"><div class="k">Manually refreshed</div><div class="v" id="tsManual">—</div></div>
+      <div class="stamp"><div class="k">Auto-refreshed</div><div class="v" id="tsAuto">—</div></div>
+      <div class="stamp"><div class="k">Sheet calculated</div><div class="v" id="tsSheet">—</div></div>
+    </div>
+    <div class="auto">
+      <label for="interval">Auto-refresh</label>
+      <select id="interval">
+        <option value="0">Off</option>
+        <option value="1">Every 1 min</option>
+        <option value="5" selected>Every 5 min</option>
+        <option value="15">Every 15 min</option>
+      </select>
+      <span class="countdown" id="countdown">Next update in —</span>
+    </div>
+  </section>
+
+  <section class="kpis" aria-label="Summary">
+    <div class="card kpi g"><div class="k">Near all-time high</div><div class="v" id="kNear">0</div><div class="d">within 1% of the peak</div></div>
+    <div class="card kpi w"><div class="k">In correction</div><div class="v" id="kCor">0</div><div class="d">down 10% to 20%</div></div>
+    <div class="card kpi b"><div class="k">In bear market</div><div class="v" id="kBear">0</div><div class="d">down 20% or more</div></div>
+    <div class="card kpi x"><div class="k">Deepest drawdown</div><div class="v" id="kDeep">—</div><div class="d" id="kDeepN">—</div></div>
+  </section>
+
+  <div class="toolbar">
+    <label class="search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="filter" type="search" placeholder="Filter by name or ticker" aria-label="Filter by name or ticker" autocomplete="off">
+    </label>
+    <label class="msort" for="msort">Sort by
+      <select id="msort">
+        <option value="">Default order</option>
+        <option value="dd:1">Deepest drawdown first</option>
+        <option value="dd:-1">Closest to all-time high</option>
+        <option value="pct:-1">Today's biggest gain</option>
+        <option value="pct:1">Today's biggest loss</option>
+        <option value="wkPos:1">Lowest in 52-wk range</option>
+        <option value="name:1">Name (A–Z)</option>
+      </select>
+    </label>
+    <div class="legend">
+      <span style="--c:var(--good)"><i></i>Near high (within 1%)</span>
+      <span style="--c:var(--dip)"><i></i>Dip (0 to −10%)</span>
+      <span style="--c:var(--warn)"><i></i>Correction (−10% to −20%)</span>
+      <span style="--c:var(--bad)"><i></i>Bear market (−20% or worse)</span>
+    </div>
+  </div>
+
+  <section class="card tcard" id="secIndex"></section>
+  <section class="card tcard" id="secStock"></section>
+
+  <footer>
+    <div><b>For educational purposes only. Not investment advice.</b> Quotes come from Google Finance through a Google Sheet and may be delayed up to 20 minutes. They are not sourced from all markets.</div>
+    <div>Drawdown = (current price ÷ all-time high − 1). The bar scale runs from 0% to −50%. Day high/low is the current or most recent trading session. 52-wk high/low is the trailing 52-week range; the marker shows where the current price sits inside each range.</div>
+  </footer>
+</main>
+
+<dialog id="srcDlg">
+  <form method="dialog" class="mbody" id="srcForm">
+    <h3>Data source</h3>
+    <p>Prices come from <code>GOOGLEFINANCE()</code> formulas in a Google Sheet that is published to the web as CSV. This page reads that CSV on every refresh.</p>
+    <ol>
+      <li>In Google Sheets: File › Import › upload <code>drawdown_sheet_template.csv</code> › Replace current sheet.</li>
+      <li>File › Settings › Calculation › set recalculation to <b>On change and every minute</b>.</li>
+      <li>Choose one way to share it, then paste that link below:
+        <br><b>Option A (simplest):</b> click <b>Share</b> › General access › <b>Anyone with the link</b> › Viewer › Copy link.
+        <br><b>Option B:</b> File › Share › Publish to web › pick the sheet tab › <b>Comma-separated values (.csv)</b> › Publish › copy the link. A "Web page" link also works; the page converts it.</li>
+    </ol>
+    <p>Open this file in Chrome, Edge or Safari. Preview panels (such as inside a chat app or email) block outside data.</p>
+    <p>Columns read: Group, Name, Ticker, Price, Change, PrevClose, DayHigh, DayLow, High52, Low52, ATH, Calculated. Attributes used: <code>price</code>, <code>change</code>, <code>closeyest</code>, <code>high</code>, <code>low</code>, <code>high52</code>, <code>low52</code>, and weekly historical <code>high</code> for the all-time high.</p>
+    <label for="srcUrl" class="stamp"><span class="k">Published CSV link</span></label>
+    <input id="srcUrl" type="url" placeholder="https://docs.google.com/spreadsheets/d/e/…/pub?gid=0&single=true&output=csv">
+    <p id="srcMsg" style="min-height:1.2em"></p>
+    <div class="mrow">
+      <button class="btn" value="cancel" type="submit">Close</button>
+      <button class="btn" id="useSample" type="button">Use sample data</button>
+      <button class="btn primary" id="saveSrc" type="button">Save and load</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+/* ===================== CONFIG ===================== */
+const CONFIG = {
+  // Paste your published CSV link here, or set it from the "Data source" button (saved in this browser).
+  // Default sheet: "drawdown_sheet_template" in Google Drive. Any link to the sheet works here.
+  QUOTES_CSV_URL: "https://docs.google.com/spreadsheets/d/1jSC9ftnGXk7fLUNO3FFnOyF2uVu023h4Fj0R7NhiYKY/edit",
+  DEFAULT_REFRESH_MIN: 5,
+  TIMEZONE: "Asia/Singapore",
+  TZ_LABEL: "GMT+8",
+};
+
+/* Sample rows shown only until a sheet is connected (illustrative, not live quotes). */
+const SAMPLE = [
+ ["Index","S&P 500","SPY",766.48,-0.31,781.62],["Index","S&P 500 (Vanguard)","VOO",704.60,-0.30,718.47],
+ ["Index","Nasdaq 100","QQQ",718.36,-1.09,762.86],["Index","MSCI World","URTH",206.65,-0.39,211.94],
+ ["Stock","Apple","AAPL",342.94,-0.43,348.15],["Stock","Microsoft","MSFT",533.52,1.91,555.45],
+ ["Stock","Alphabet","GOOGL",344.18,0.92,408.61],["Stock","Amazon","AMZN",262.45,6.22,287.20],
+ ["Stock","Meta","META",705.44,7.71,796.25],["Stock","Nvidia","NVDA",217.09,1.61,243.37],
+ ["Stock","AMD","AMD",538.05,-14.53,658.52],["Stock","Broadcom","AVGO",334.59,-1.97,495.00],
+ ["Stock","TSMC","TSM",420.22,1.65,487.47],["Stock","Tesla","TSLA",368.06,5.93,498.83],
+ ["Stock","Qualcomm","QCOM",173.53,-3.64,259.92],["Stock","Arm Holdings","ARM",228.05,-4.61,452.70],
+ ["Stock","Micron","MU",904.90,-15.57,1255.00],["Stock","Palo Alto Networks","PANW",346.95,-0.67,432.33],
+ ["Stock","Fortinet","FTNT",171.50,1.72,197.13],["Stock","Walmart","WMT",118.70,0.26,135.16],
+ ["Stock","McDonald's","MCD",242.67,1.84,341.75]
+].map(([group,name,ticker,price,change,ath])=>{
+  const prev=price-change, lo=Math.min(prev,price)*0.992, hi=Math.max(prev,price)*1.006;
+  return {group,name,ticker,price,change,prevClose:prev,dayHigh:hi,dayLow:lo,high52:ath,low52:price*0.74,ath};
+});
+
+/* ===================== STATE ===================== */
+const store = {
+  get(k){try{return localStorage.getItem(k)}catch(e){return null}},
+  set(k,v){try{v==null?localStorage.removeItem(k):localStorage.setItem(k,v)}catch(e){}}
+};
+const $ = id => document.getElementById(id);
+const state = {
+  rows: [], prev: new Map(), sheetCalc: "", mode: "sample",
+  sort: { Index:{key:null,dir:1}, Stock:{key:null,dir:1} },
+  filter: "", intervalMin: CONFIG.DEFAULT_REFRESH_MIN, nextAt: 0,
+  lastOk: 0, lastManual: 0, lastAuto: 0, error: "",
+};
+function sourceUrl(){
+  const q = new URLSearchParams(location.search).get("sheet");
+  return (q || store.get("ddm.csv") || CONFIG.QUOTES_CSV_URL || "").trim();
+}
+
+/* ===================== FORMAT ===================== */
+const fmtNum = (v,d=2) => v==null||!isFinite(v) ? "—" : v.toLocaleString("en-US",{minimumFractionDigits:d,maximumFractionDigits:d});
+const fmtPct = v => v==null||!isFinite(v) ? "—" : (v>0?"+":v<0?"−":"")+Math.abs(v*100).toFixed(2)+"%";
+const fmtDD = v => v==null||!isFinite(v) ? "—" : (v<0?"−":"")+Math.abs(v*100).toFixed(2)+"%";
+function fmtTime(t){
+  if(!t) return "—";
+  const p = new Intl.DateTimeFormat("en-US",{timeZone:CONFIG.TIMEZONE,month:"short",day:"numeric",year:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}).format(new Date(t));
+  return p.replace(" at ",", ") + " " + CONFIG.TZ_LABEL;
+}
+const esc = s => String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+/* ===================== CSV ===================== */
+function parseCSV(text){
+  const out=[]; let row=[], f="", q=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(q){ if(c=='"'){ if(text[i+1]=='"'){f+='"';i++} else q=false } else f+=c; }
+    else if(c=='"') q=true;
+    else if(c==','){ row.push(f); f=""; }
+    else if(c=='\n'||c=='\r'){ if(c=='\r'&&text[i+1]=='\n') i++; row.push(f); out.push(row); row=[]; f=""; }
+    else f+=c;
+  }
+  if(f!==""||row.length){ row.push(f); out.push(row); }
+  return out.filter(r=>r.some(x=>x.trim()!==""));
+}
+function num(v){
+  if(v==null) return null;
+  let s=String(v).trim().replace(/[$,\s]/g,"").replace(/−/g,"-");
+  if(s===""||/^#|N\/A/i.test(s)) return null;
+  if(/^\(.*\)$/.test(s)) s="-"+s.slice(1,-1);
+  const n=parseFloat(s.replace("%",""));
+  return isFinite(n)?n:null;
+}
+function rowsFromCSV(text){ return rowsFromTable(parseCSV(text)); }
+function rowsFromTable(t){
+  if(t.length<2) throw new Error("The sheet returned no rows.");
+  const H=t[0].map(h=>h.trim().toLowerCase().replace(/[^a-z0-9]/g,""));
+  const ix=k=>H.indexOf(k);
+  const need=["name","ticker","price","ath"];
+  const miss=need.filter(k=>ix(k)<0);
+  if(miss.length) throw new Error("The sheet is missing column(s): "+miss.join(", ")+". Check that you published the Quotes tab as CSV.");
+  const g=(r,k)=>ix(k)>=0?r[ix(k)]:"";
+  let calc="";
+  const rows=t.slice(1).map(r=>{
+    if(!calc && g(r,"calculated")) calc=g(r,"calculated").trim();
+    const price=num(g(r,"price")), change=num(g(r,"change"));
+    let prev=num(g(r,"prevclose")); if(prev==null&&price!=null&&change!=null) prev=price-change;
+    const high52=num(g(r,"high52"));
+    let ath=num(g(r,"ath")); ath=Math.max(...[ath,high52,price].filter(x=>x!=null)); if(!isFinite(ath)) ath=null;
+    return {group:/index|etf/i.test(g(r,"group"))?"Index":"Stock",name:g(r,"name").trim(),ticker:g(r,"ticker").trim(),
+      price,change,prevClose:prev,dayHigh:num(g(r,"dayhigh")),dayLow:num(g(r,"daylow")),high52,low52:num(g(r,"low52")),ath};
+  }).filter(r=>r.name||r.ticker);
+  return {rows,calc};
+}
+
+/* ===================== DERIVED ===================== */
+function derive(r){
+  const dd = r.price!=null&&r.ath ? r.price/r.ath-1 : null;
+  const pct = r.change!=null&&r.prevClose ? r.change/r.prevClose : null;
+  const status = dd==null?null : dd>=-0.01?"near" : dd>-0.10?"dip" : dd>-0.20?"cor" : "bear";
+  const pos=(lo,hi)=> r.price==null||lo==null||hi==null ? null : hi===lo ? 0.5 : Math.min(1,Math.max(0,(r.price-lo)/(hi-lo)));
+  return {...r, dd, pct, status, dayPos:pos(r.dayLow,r.dayHigh), wkPos:pos(r.low52,r.high52),
+    off52: r.price!=null&&r.high52 ? r.price/r.high52-1 : null};
+}
+const STATUS = {near:["Near high","s-near"],dip:["Dip","s-dip"],cor:["Correction","s-cor"],bear:["Bear market","s-bear"]};
+
+/* ===================== RENDER ===================== */
+const COLS = [
+  {key:"name",label:"Name",cls:"sticky"},
+  {key:"ticker",label:"Ticker"},
+  {key:"price",label:"Current price",cls:"r"},
+  {key:"dayHigh",label:"Day high / low",cls:"r"},
+  {key:"high52",label:"52-wk high / low",cls:"r"},
+  {key:"ath",label:"All-time high",cls:"r"},
+  {key:"dd",label:"Drawdown",cls:"r"},
+  {key:"status",label:"Status"},
+];
+const ARROW_UP='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
+const ARROW_DN='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12l7 7 7-7"/></svg>';
+
+function rangeCell(hi,lo,pos,price,note){
+  const mk = pos==null ? "" : `<span class="mk" style="left:${(pos*100).toFixed(1)}%"></span>`;
+  const tip = `Low ${fmtNum(lo)} · Price ${fmtNum(price)} · High ${fmtNum(hi)}`;
+  return `<div class="rng" title="${tip}">
+    <span class="lab">H</span><span class="val">${fmtNum(hi)}</span>
+    <span class="lab">L</span><span class="val">${fmtNum(lo)}</span>
+    <span class="rbar"><span class="fill" style="width:${pos==null?0:(pos*100).toFixed(1)}%"></span>${mk}</span>
+    ${note?`<span class="note">${note}</span>`:""}</div>`;
+}
+function rowHTML(r){
+  const dir = r.change==null||r.change===0 ? "flat" : r.change>0 ? "up":"down";
+  const arrow = dir==="down"?"▼":dir==="up"?"▲":"■";
+  const st = STATUS[r.status]||["—",""];
+  const w = r.dd==null?0:Math.min(1,Math.abs(r.dd)/0.5)*100;
+  const old = state.prev.get(r.ticker);
+  const flash = old!=null&&r.price!=null&&old!==r.price ? (r.price>old?"flash-up":"flash-down") : "";
+  const pctTxt = r.pct==null?"—":fmtPct(r.pct);
+  const chgTxt = r.change==null?"":` (${r.change>0?"+":r.change<0?"−":""}${fmtNum(Math.abs(r.change))})`;
+  return `<tr class="${st[1]}">
+    <td class="name sticky c-name">${esc(r.name)}</td>
+    <td class="tk c-tk">${esc(r.ticker)}</td>
+    <td class="r c-price ${flash}">
+      <div class="price">${fmtNum(r.price)}</div>
+      <div class="chg ${dir}">${arrow} ${r.change==null?"—":fmtNum(Math.abs(r.change))}</div>
+      <span class="today ${dir}"><span class="ic">${dir==="down"?ARROW_DN:ARROW_UP}</span>${pctTxt}${chgTxt} Today</span>
+    </td>
+    <td class="r c-day" data-label="Day high / low">${rangeCell(r.dayHigh,r.dayLow,r.dayPos,r.price)}</td>
+    <td class="r c-wk" data-label="52-wk high / low">${rangeCell(r.high52,r.low52,r.wkPos,r.price,r.off52==null?"":fmtDD(r.off52)+" from 52-wk high")}</td>
+    <td class="r ath c-ath" data-label="All-time high">${fmtNum(r.ath)}</td>
+    <td class="r c-dd" data-label="Drawdown"><div class="dd"><span class="ddbar"><i style="width:${w}%"></i></span><span class="ddv">${fmtDD(r.dd)}</span></div></td>
+    <td class="c-st"><span class="pill">${st[0]}</span></td>
+  </tr>`;
+}
+function sortRows(rows,s){
+  if(!s.key) return rows;
+  const order={near:0,dip:1,cor:2,bear:3};
+  return [...rows].sort((a,b)=>{
+    let x=a[s.key], y=b[s.key];
+    if(s.key==="status"){x=order[x];y=order[y]}
+    if(x==null) return 1; if(y==null) return -1;
+    return (typeof x==="string" ? x.localeCompare(y) : x-y)*s.dir;
+  });
+}
+function renderSection(group,el,title){
+  const all = state.rows.filter(r=>r.group===group);
+  const f = state.filter.toLowerCase();
+  const shown = sortRows(all.filter(r=>!f||r.name.toLowerCase().includes(f)||r.ticker.toLowerCase().includes(f)), state.sort[group]);
+  const dds = all.map(r=>r.dd).filter(v=>v!=null);
+  const avg = dds.length ? dds.reduce((a,b)=>a+b,0)/dds.length : null;
+  const s = state.sort[group];
+  const ths = COLS.map(c=>{
+    const on = s.key===c.key;
+    return `<th class="${c.cls||""}" ${on?`aria-sort="${s.dir>0?"ascending":"descending"}"`:""}><button type="button" data-g="${group}" data-k="${c.key}">${c.label}<span class="arr">${on?(s.dir>0?"↑":"↓"):"↕"}</span></button></th>`;
+  }).join("");
+  el.innerHTML = `<div class="thead"><h2>${title}</h2><span class="meta">${all.length} TRACKED · AVG ${fmtDD(avg)}</span></div>
+    <div class="scroll"><table><thead><tr>${ths}</tr></thead><tbody>
+    ${shown.length ? shown.map(rowHTML).join("") : `<tr class="empty"><td colspan="8">${state.filter?`No tickers match “${esc(state.filter)}”.`:"Loading prices…"}</td></tr>`}
+    </tbody></table></div>`;
+  el.hidden = all.length===0 && !loading;
+}
+function render(){
+  renderSection("Index",$("secIndex"),"Indices");
+  renderSection("Stock",$("secStock"),"Individual stocks");
+  const v = state.rows.filter(r=>r.dd!=null);
+  $("kNear").textContent = v.filter(r=>r.status==="near").length;
+  $("kCor").textContent = v.filter(r=>r.status==="cor").length;
+  $("kBear").textContent = v.filter(r=>r.status==="bear").length;
+  const deep = v.reduce((m,r)=>!m||r.dd<m.dd?r:m,null);
+  $("kDeep").textContent = deep?fmtDD(deep.dd):"—";
+  $("kDeepN").textContent = deep?`${deep.name} (${deep.ticker})`:"—";
+  $("tsLast").textContent = fmtTime(state.lastOk);
+  $("tsManual").textContent = fmtTime(state.lastManual);
+  $("tsAuto").textContent = fmtTime(state.lastAuto);
+  $("tsSheet").textContent = state.mode==="sample" ? "Sample data" : (state.sheetCalc||"—");
+  renderBanner(); renderLive();
+}
+function renderBanner(){
+  const b=$("banner");
+  if(state.error){
+    b.innerHTML=`<div class="banner err"><b>Couldn't load the sheet.</b> ${esc(state.error)} ${state.mode==="sample"?"Showing sample data, not live quotes.":"Showing the last loaded prices."} <button class="linkbtn" type="button" data-open-src>Check data source</button></div>`;
+  } else if(loading && !state.rows.length){
+    b.innerHTML=`<div class="banner demo"><b>Loading prices from your Google Sheet…</b> If Claude asks to allow Google Drive for this page, choose Allow.</div>`;
+  } else if(state.mode==="sample"){
+    b.innerHTML=`<div class="banner demo"><b>Sample data.</b> These figures are illustrative, not live quotes. Connect your Google Sheet to load Google Finance prices. <button class="linkbtn" type="button" data-open-src>Connect sheet</button></div>`;
+  } else b.innerHTML="";
+}
+function renderLive(){
+  const el=$("live"), t=$("liveTxt");
+  el.classList.remove("stale","off","demo");
+  if(state.mode==="sample"){el.classList.add("demo");t.textContent="SAMPLE";return}
+  if(state.error&&!state.lastOk){el.classList.add("off");t.textContent="OFFLINE";return}
+  const limit = Math.max(2*state.intervalMin,10)*60000;
+  if(state.error || Date.now()-state.lastOk>limit){el.classList.add("stale");t.textContent="STALE";return}
+  t.textContent="LIVE";
+}
+
+/* ===================== SOURCE LINKS ===================== */
+/* Accepts either:
+   A) a "Publish to web" link (…/d/e/<key>/pub…). Web-page links (pubhtml) are converted to CSV automatically.
+   B) the sheet's normal link (…/d/<id>/edit#gid=0), shared as "Anyone with the link: Viewer".
+      Read through Google's query endpoint with a script tag, which works even where CSV fetch is blocked. */
+function resolveSource(raw){
+  let u; try{ u=new URL(raw); }catch(e){ throw new Error("That isn't a valid web link."); }
+  if(!/docs\.google\.com$/.test(u.hostname)) throw new Error("The link must start with https://docs.google.com/spreadsheets/.");
+  const pub = u.pathname.match(/^\/spreadsheets\/d\/e\/([^/]+)\/pub(html)?/);
+  if(pub){
+    u.pathname=`/spreadsheets/d/e/${pub[1]}/pub`;
+    u.searchParams.set("output","csv");
+    u.searchParams.delete("widget"); u.searchParams.delete("headers"); u.searchParams.delete("chrome");
+    if(u.hash){ const g=u.hash.match(/gid=(\d+)/); if(g) u.searchParams.set("gid",g[1]); u.hash=""; }
+    if(u.searchParams.get("gid")) u.searchParams.set("single","true");
+    return {type:"csv",url:u.toString()};
+  }
+  const id = u.pathname.match(/^\/spreadsheets\/d\/([a-zA-Z0-9_-]{20,})/);
+  if(id){
+    const g = (u.hash.match(/gid=(\d+)/)||[])[1] || u.searchParams.get("gid") || "0";
+    return {type:"gviz",id:id[1],gid:g};
+  }
+  throw new Error("This doesn't look like a Google Sheets link.");
+}
+function loadGviz(id,gid){
+  return new Promise((resolve,reject)=>{
+    const cb="__ddm"+Date.now()+Math.floor(Math.random()*1e4);
+    const s=document.createElement("script");
+    const done=()=>{ clearTimeout(timer); delete window[cb]; s.remove(); };
+    const timer=setTimeout(()=>{ done(); reject(new Error("Google didn't answer. In the sheet, click Share › General access › Anyone with the link › Viewer, then refresh.")); },15000);
+    window[cb]=resp=>{
+      done();
+      if(!resp||resp.status==="error"){
+        const d=resp&&resp.errors&&resp.errors[0];
+        return reject(new Error((d&&(d.detailed_message||d.message)?d.detailed_message||d.message:"Google returned an error")+". Check that the sheet is shared as Anyone with the link › Viewer."));
+      }
+      const tbl=resp.table;
+      const head=tbl.cols.map(c=>c.label||c.id||"");
+      const body=tbl.rows.map(r=>(r.c||[]).map(c=>c==null?"":(typeof c.v==="number"?String(c.v):(c.f!=null&&typeof c.v!=="string"?c.f:(c.v??"")))));
+      resolve(rowsFromTable([head,...body]));
+    };
+    s.onerror=()=>{ done(); reject(new Error(inPreview()
+      ? "This page is open inside a preview panel, which blocks outside data. Download the file and open it in Chrome, Edge or Safari."
+      : "The sheet couldn't be read. Share it as Anyone with the link › Viewer, or use the Publish to web CSV link.")); };
+    s.src=`https://docs.google.com/spreadsheets/d/${id}/gviz/tq?tqx=out:json;responseHandler:${cb}&headers=1&gid=${gid}&t=${Date.now()}`;
+    document.head.appendChild(s);
+  });
+}
+/* Inside Claude, outside requests are blocked, so the sheet is read through the viewer's Google Drive connector. */
+let mcpPromise=null;
+function getMcp(){
+  if(!mcpPromise) mcpPromise = (window.claude && typeof window.claude.use==="function") ? window.claude.use("mcp").catch(()=>null) : Promise.resolve(null);
+  return mcpPromise;
+}
+function driveMessage(e){
+  switch(e&&e.code){
+    case "server_not_connected": return "Google Drive isn't connected. Add it in claude.ai Settings › Connectors, then click Refresh now.";
+    case "needs_reauth": return "Google Drive needs to be reconnected. Reconnect it in claude.ai Settings › Connectors, then click Refresh now.";
+    case "selection_required": return "You have more than one Google Drive connected. Choose one when Claude asks, then click Refresh now.";
+    case "not_in_manifest": case "approval_required": case "consent_required":
+      return "This page needs your permission to read the sheet from Google Drive. Click Refresh now and choose Allow.";
+    case "blocked_by_policy": return "Your organization's settings block Google Drive for this page.";
+    case "tool_error": return "Google Drive couldn't open the sheet. Check that the link points to your sheet and that you can open it.";
+    case "server_unavailable": return "Google Drive didn't respond. The page will try again at the next refresh.";
+    default: return "Google Drive couldn't be reached. Click Refresh now to try again.";
+  }
+}
+function b64ToText(b64){
+  const bin=atob(String(b64).replace(/\s/g,""));
+  const bytes=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  return new TextDecoder("utf-8").decode(bytes);
+}
+async function loadViaDrive(mcp,fileId){
+  const call=()=>mcp.callTool("Google Drive","download_file_content",{fileId,exportMimeType:"text/csv"},{cache:false});
+  let r;
+  try{ r=await call(); }
+  catch(e){
+    if(e&&e.retryable){
+      await new Promise(ok=>setTimeout(ok,Math.min(e.retryAfterMs||1500,15000)+Math.random()*800));
+      try{ r=await call(); }catch(e2){ throw new Error(driveMessage(e2)); }
+    } else throw new Error(driveMessage(e));
+  }
+  const p=r.payload;
+  const b64 = p&&typeof p==="object" ? p.content : null;
+  let text = b64 ? b64ToText(b64) : (typeof p==="string" ? p : "");
+  if(!text) throw new Error("Google Drive returned no data for the sheet.");
+  if(!/^\s*"?group"?\s*,/i.test(text) && /^[A-Za-z0-9+/=\s]+$/.test(text.slice(0,200))){ try{ text=b64ToText(text); }catch(e){} }
+  return rowsFromCSV(text);
+}
+function inPreview(){
+  try{ if(window.top!==window.self) return true; }catch(e){ return true; }
+  return !/^(https?|file):$/.test(location.protocol);
+}
+async function fetchRows(raw){
+  const src=resolveSource(raw);
+  const mcp = await getMcp();
+  if(mcp){
+    if(src.type!=="gviz") throw new Error("Inside Claude the page reads your sheet through Google Drive, which needs the sheet's normal link (it contains /d/<id>/edit). Paste that link in Data source.");
+    return loadViaDrive(mcp,src.id);
+  }
+  if(src.type==="gviz") return loadGviz(src.id,src.gid);
+  let res;
+  try{
+    res = await fetch(src.url+"&t="+Date.now(),{cache:"no-store"});
+  }catch(e){
+    throw new Error(inPreview()
+      ? "This page is open inside a preview panel, which blocks outside data. Download the file and open it in Chrome, Edge or Safari."
+      : "Your browser couldn't read the published CSV. In the sheet, open File › Share › Publish to web, pick the Quotes tab and \"Comma-separated values (.csv)\", click Publish, and copy that link. Or paste the sheet's normal link instead after setting Share › Anyone with the link › Viewer.");
+  }
+  if(!res.ok) throw new Error(`Google returned HTTP ${res.status}. The sheet may no longer be published; publish it again from File › Share › Publish to web.`);
+  const text = await res.text();
+  if(/^\s*<!doctype|<html/i.test(text)) throw new Error("Google returned a sign-in or web page instead of data. Publish the sheet to the web as CSV, or share it as Anyone with the link › Viewer.");
+  return rowsFromCSV(text);
+}
+
+/* ===================== LOAD ===================== */
+let loading=false;
+async function load(kind){
+  const url=sourceUrl();
+  if(!url){
+    state.mode="sample"; state.rows=SAMPLE.map(derive); state.error="";
+    state.lastOk=Date.now(); if(kind==="manual") state.lastManual=state.lastOk; if(kind==="auto") state.lastAuto=state.lastOk;
+    render(); return;
+  }
+  if(loading) return; loading=true; $("refreshBtn").classList.add("busy"); render();
+  try{
+    const {rows,calc} = await fetchRows(url);
+    state.prev = new Map(state.rows.map(r=>[r.ticker,r.price]));
+    state.rows = rows.map(derive); state.sheetCalc = calc; state.mode="live"; state.error="";
+    state.lastOk = Date.now();
+    if(kind==="manual") state.lastManual=state.lastOk; else state.lastAuto=state.lastOk;
+  }catch(e){
+    state.error = e.message || "The sheet couldn't be loaded. Check the link and your connection.";
+    if(!state.rows.length){ state.rows=SAMPLE.map(derive); state.mode="sample"; }
+  }finally{
+    loading=false; $("refreshBtn").classList.remove("busy"); render();
+  }
+}
+
+/* ===================== TIMER ===================== */
+function schedule(){ state.nextAt = state.intervalMin>0 ? Date.now()+state.intervalMin*60000 : 0; }
+setInterval(()=>{
+  if(document.hidden) return;
+  if(!state.nextAt){ $("countdown").textContent="Auto-refresh off"; return; }
+  const ms=state.nextAt-Date.now();
+  if(ms<=0){ schedule(); load("auto"); }
+  const s=Math.max(0,Math.ceil((state.nextAt-Date.now())/1000));
+  $("countdown").textContent=`Next update in ${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+  renderLive();
+},1000);
+document.addEventListener("visibilitychange",()=>{
+  if(!document.hidden && state.nextAt && Date.now()>=state.nextAt){ schedule(); load("auto"); }
+});
+
+/* ===================== EVENTS ===================== */
+$("refreshBtn").addEventListener("click",()=>{ schedule(); load("manual"); });
+$("interval").addEventListener("change",e=>{ state.intervalMin=+e.target.value; store.set("ddm.int",e.target.value); schedule(); });
+$("filter").addEventListener("input",e=>{ state.filter=e.target.value.trim(); render(); });
+$("msort").addEventListener("change",e=>{
+  const [key,dir]=e.target.value.split(":");
+  for(const g of ["Index","Stock"]) state.sort[g] = key ? {key,dir:+dir} : {key:null,dir:1};
+  render();
+});
+document.addEventListener("click",e=>{
+  const th=e.target.closest("th button");
+  if(th){ const s=state.sort[th.dataset.g], k=th.dataset.k;
+    if(s.key===k){ if(s.dir===1) s.dir=-1; else { s.key=null; s.dir=1; } }
+    else { s.key=k; s.dir = (k==="name"||k==="ticker"||k==="dd"||k==="status")?1:-1; if(k==="dd") s.dir=1; }
+    render(); return; }
+  if(e.target.closest("[data-open-src]")) openSrc();
+});
+
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toast.h); toast.h=setTimeout(()=>t.classList.remove("show"),2200); }
+$("shareBtn").addEventListener("click",async()=>{
+  const url=location.href;
+  try{ if(navigator.share){ await navigator.share({title:document.title,url}); return; } }catch(e){ if(e.name==="AbortError") return; }
+  try{ await navigator.clipboard.writeText(url); toast("Link copied"); }
+  catch(e){ toast("Copy the address from your browser bar"); }
+});
+
+function applyTheme(t){
+  if(t) document.documentElement.dataset.theme=t; else delete document.documentElement.dataset.theme;
+  const dark = t ? t==="dark" : !matchMedia("(prefers-color-scheme: light)").matches;
+  $("themeTxt").textContent = dark?"Light":"Dark";
+}
+$("themeBtn").addEventListener("click",()=>{
+  const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: light)").matches?"light":"dark");
+  const next = cur==="dark"?"light":"dark"; store.set("ddm.theme",next); applyTheme(next);
+});
+
+function openSrc(){ $("srcUrl").value=sourceUrl(); $("srcMsg").textContent=""; $("srcDlg").showModal(); }
+$("srcBtn").addEventListener("click",openSrc);
+$("saveSrc").addEventListener("click",()=>{
+  const v=$("srcUrl").value.trim();
+  if(!/^https:\/\/docs\.google\.com\/spreadsheets\//.test(v)){ $("srcMsg").textContent="Paste a docs.google.com/spreadsheets link published as CSV."; return; }
+  store.set("ddm.csv",v); state.rows=[]; $("srcDlg").close(); schedule(); load("manual");
+});
+$("useSample").addEventListener("click",()=>{ store.set("ddm.csv",null); state.rows=[]; $("srcDlg").close(); load("manual"); });
+
+/* ===================== INIT ===================== */
+applyTheme(store.get("ddm.theme"));
+const savedInt=store.get("ddm.int"); if(savedInt!=null){ state.intervalMin=+savedInt; $("interval").value=savedInt; }
+schedule(); load("auto");
+</script>
+</body>
+</html>
